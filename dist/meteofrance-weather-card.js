@@ -94,6 +94,7 @@ const translations = {
       "Pluie forte": "Pluie forte",
     },
     "slidingSlots": {
+      "ce": "Ce",
       "matin": "Matin",
       "midi": "Midi",
       "soir": "Soir",
@@ -154,6 +155,7 @@ const translations = {
       "Pluie forte": "Heavy rain",
     },
     "slidingSlots": {
+      "ce": "This",
       "matin": "Morning",
       "midi": "Afternoon",
       "soir": "Evening",
@@ -533,7 +535,7 @@ _unsubscribeDailyForecastEvents() {
           slotName = cesoirLabel;
         }
       } else {
-        slotPrefix = bestDayOffset > 0 ? t.slidingSlots.demain : "";
+        slotPrefix = bestDayOffset > 0 ? t.slidingSlots.demain : t.slidingSlots.ce;
         slotName = t.slidingSlots[slot.key];
       }
 
