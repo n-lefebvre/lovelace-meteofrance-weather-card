@@ -520,11 +520,16 @@ _unsubscribeDailyForecastEvents() {
 
       if (!best) return null;
 
-      const label = slot.key === "soir"
-        ? (bestDayOffset === 0 ? t.slidingSlots.cesoir : `${t.slidingSlots.demain} ${t.slidingSlots.soir}`)
-        : (bestDayOffset > 0 ? `${t.slidingSlots.demain} ${t.slidingSlots[slot.key]}` : t.slidingSlots[slot.key]);
+      let slotPrefix = "";
+      let slotName;
+      if (slot.key === "soir" && bestDayOffset === 0) {
+        slotName = t.slidingSlots.cesoir;
+      } else {
+        slotPrefix = bestDayOffset > 0 ? t.slidingSlots.demain : "";
+        slotName = t.slidingSlots[slot.key];
+      }
 
-      return { ...best, _slotLabel: label, _slotKey: slot.key, _slotDayOffset: bestDayOffset };
+      return { ...best, _slotLabel: slotName, _slotPrefix: slotPrefix, _slotKey: slot.key, _slotDayOffset: bestDayOffset };
     };
 
     const result = slotDefs.map((s) => findSlot(s)).filter(Boolean);
@@ -671,7 +676,11 @@ _unsubscribeDailyForecastEvents() {
   }
 
   renderDetails(stateObj) {
+    const hasColumns = this._config.show_details_columns !== false;
     const sun = this.hass.states["sun.sun"];
+    const hasSun = this.isSelected(this._config.show_sun) && !!sun;
+    if (!hasColumns && !hasSun) return html``;
+
     const lang = this.hass.language;
     const timeZone = this.hass.config.time_zone;
     const t = this.getTranslations();
@@ -877,7 +886,7 @@ _unsubscribeDailyForecastEvents() {
       <ul class="flow-column day">
         <li>
           ${daily._slotLabel !== undefined
-            ? html`${daily._slotLabel}<span class="slotTime">${new Date(daily.datetime).toLocaleTimeString(lang, { "hour": "2-digit", "minute": "2-digit", "timeZone": this.hass.config.time_zone, ...this.getTimeFormatOptions() })}</span>`
+            ? html`${daily._slotPrefix ? html`${daily._slotPrefix}<br>` : ""}${daily._slotLabel}<span class="slotTime">${new Date(daily.datetime).toLocaleTimeString(lang, { "hour": "2-digit", "minute": "2-digit", "timeZone": this.hass.config.time_zone, ...this.getTimeFormatOptions() })}</span>`
             : isDaily
               ? new Date(daily.datetime).toLocaleDateString(lang, {
                   weekday: "short",
@@ -1440,6 +1449,7 @@ _unsubscribeDailyForecastEvents() {
 
       .forecast ul.day {
         align-items: center;
+        text-align: center;
         width: auto;
       }
 
