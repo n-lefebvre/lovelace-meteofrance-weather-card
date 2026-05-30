@@ -210,6 +210,7 @@ class MeteofranceWeatherCard extends LitElement {
       "_config": {},
       "_dailyForecastEvent": {},
       "_hourlyForecastEvent": {},
+      "_slidingForecastEvent": {},
       "hass": {},
     };
   }
@@ -372,6 +373,7 @@ _unsubscribeDailyForecastEvents() {
       !this.isConnected ||
       !this.hass ||
       !this._config ||
+      this._config.forecast_type === "sliding" ||
       !this.isSelected(this._config.daily_forecast)
     ) {
       return;
@@ -395,6 +397,7 @@ _unsubscribeDailyForecastEvents() {
       !this.isConnected ||
       !this.hass ||
       !this._config ||
+      this._config.forecast_type === "sliding" ||
       !this.isSelected(this._config.hourly_forecast)
     ) {
       return;
@@ -412,11 +415,103 @@ _unsubscribeDailyForecastEvents() {
     );
   }
 
+  _unsubscribeSlidingForecastEvents() {
+    if (this._sliding_subscribed) {
+      this._sliding_subscribed.then((unsub) => unsub());
+      this._sliding_subscribed = undefined;
+    }
+  }
+
+  async _subscribeSlidingForecastEvents() {
+    this._unsubscribeSlidingForecastEvents();
+    if (
+      !this.isConnected ||
+      !this.hass ||
+      !this._config ||
+      this._config.forecast_type !== "sliding"
+    ) {
+      return;
+    }
+
+    this._sliding_subscribed = this.hass.connection.subscribeMessage(
+      (event) => {
+        this._slidingForecastEvent = event;
+      },
+      {
+        "type": "weather/subscribe_forecast",
+        "forecast_type": "hourly",
+        "entity_id": this._config.entity,
+      }
+    );
+  }
+
+  _computeSlidingForecast(forecastEvent) {
+    if (!forecastEvent || !forecastEvent.forecast || !forecastEvent.forecast.length) {
+      return null;
+    }
+
+    const tz = this.hass.config.time_zone;
+    const now = new Date();
+
+    const localHour = (new Intl.DateTimeFormat("en", {
+      hour: "numeric",
+      hour12: false,
+      timeZone: tz,
+    }).format(now) | 0) % 24;
+
+    let targets;
+    if (localHour >= 6 && localHour < 13) {
+      targets = [[0, 9], [0, 14], [0, 20]];
+    } else if (localHour >= 13 && localHour < 19) {
+      targets = [[0, 14], [0, 20], [1, 9]];
+    } else {
+      targets = [[0, 20], [1, 9], [1, 14]];
+    }
+
+    const getLocalParts = (date) => {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "numeric",
+        hour12: false,
+        timeZone: tz,
+      }).formatToParts(date);
+      const get = (type) => parseInt(parts.find((p) => p.type === type).value, 10);
+      return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour") % 24 };
+    };
+
+    const nowParts = getLocalParts(now);
+    const todayMs = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day);
+
+    const result = targets.map(([dayOffset, targetHour]) => {
+      let best = null;
+      let bestDiff = Infinity;
+      for (const entry of forecastEvent.forecast) {
+        const ep = getLocalParts(new Date(entry.datetime));
+        const entryDayMs = Date.UTC(ep.year, ep.month - 1, ep.day);
+        const entryOffset = Math.round((entryDayMs - todayMs) / 86400000);
+        if (entryOffset === dayOffset) {
+          const diff = Math.abs(ep.hour - targetHour);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            best = entry;
+          }
+        }
+      }
+      return best;
+    }).filter(Boolean);
+
+    if (!result.length) return null;
+    return { type: "hourly", forecast: result };
+  }
+
   connectedCallback() {
     super.connectedCallback();
     if (this.hasUpdated && this._config && this.hass) {
       this._subscribeDailyForecastEvents();
       this._subscribeHourlyForecastEvents();
+      this._subscribeSlidingForecastEvents();
     }
   }
 
@@ -424,6 +519,7 @@ _unsubscribeDailyForecastEvents() {
     super.disconnectedCallback();
     this._unsubscribeDailyForecastEvents();
     this._unsubscribeHourlyForecastEvents();
+    this._unsubscribeSlidingForecastEvents();
   }
 
   updated(changedProps) {
@@ -435,6 +531,9 @@ _unsubscribeDailyForecastEvents() {
     }
     if (changedProps.has("_config") || !this._hourly_subscribed) {
       this._subscribeHourlyForecastEvents();
+    }
+    if (changedProps.has("_config") || !this._sliding_subscribed) {
+      this._subscribeSlidingForecastEvents();
     }
   }
 
@@ -487,11 +586,14 @@ _unsubscribeDailyForecastEvents() {
         ${this.isSelected(this._config.details) && this.isSelected(this._config.one_hour_forecast)
           ? this.renderOneHourForecast()
           : ""}
-        ${this.isSelected(this._config.hourly_forecast)
+        ${this._config.forecast_type !== "sliding" && this.isSelected(this._config.hourly_forecast)
           ? this.renderForecast(this._hourlyForecastEvent, this._config.number_of_hourly_forecasts)
           : ""}
-        ${this.isSelected(this._config.daily_forecast)
+        ${this._config.forecast_type !== "sliding" && this.isSelected(this._config.daily_forecast)
           ? this.renderForecast(this._dailyForecastEvent, this._config.number_of_daily_forecasts)
+          : ""}
+        ${this._config.forecast_type === "sliding"
+          ? this.renderForecast(this._computeSlidingForecast(this._slidingForecastEvent), this._config.number_of_forecasts || 3)
           : ""}
       </ha-card>
     `;
