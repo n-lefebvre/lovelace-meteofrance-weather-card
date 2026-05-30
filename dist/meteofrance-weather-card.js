@@ -1461,6 +1461,7 @@ _unsubscribeDailyForecastEvents() {
       .forecast ul.day {
         align-items: center;
         text-align: center;
+        font-size: 1.15em;
         width: auto;
       }
 
@@ -1484,8 +1485,8 @@ _unsubscribeDailyForecastEvents() {
       }
 
       .forecast ul.day .icon {
-        width: 50px;
-        height: 50px;
+        width: 60px;
+        height: 60px;
       }
     `;
   }
