@@ -93,6 +93,12 @@ const translations = {
       "Pluie modérée": "Pluie modérée",
       "Pluie forte": "Pluie forte",
     },
+    "slidingSlots": {
+      "matin": "Matin",
+      "midi": "Midi",
+      "soir": "Soir",
+      "demain": "Demain",
+    },
   },
   "en": {
     "conditions": {
@@ -145,6 +151,12 @@ const translations = {
       "Pluie faible": "Light rain",
       "Pluie modérée": "Moderate rain",
       "Pluie forte": "Heavy rain",
+    },
+    "slidingSlots": {
+      "matin": "Morning",
+      "midi": "Afternoon",
+      "soir": "Evening",
+      "demain": "Tmw.",
     },
   },
 };
@@ -452,21 +464,8 @@ _unsubscribeDailyForecastEvents() {
 
     const tz = this.hass.config.time_zone;
     const now = new Date();
-
-    const localHour = (new Intl.DateTimeFormat("en", {
-      hour: "numeric",
-      hour12: false,
-      timeZone: tz,
-    }).format(now) | 0) % 24;
-
-    let targets;
-    if (localHour >= 6 && localHour < 13) {
-      targets = [[0, 9], [0, 14], [0, 20]];
-    } else if (localHour >= 13 && localHour < 19) {
-      targets = [[0, 14], [0, 20], [1, 9]];
-    } else {
-      targets = [[0, 20], [1, 9], [1, 14]];
-    }
+    // 30-minute grace: don't discard entries that just tipped into the past
+    const cutoff = new Date(now.getTime() - 30 * 60 * 1000);
 
     const getLocalParts = (date) => {
       const parts = new Intl.DateTimeFormat("en-CA", {
@@ -483,27 +482,55 @@ _unsubscribeDailyForecastEvents() {
 
     const nowParts = getLocalParts(now);
     const todayMs = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day);
+    const t = this.getTranslations();
 
-    const result = targets.map(([dayOffset, targetHour]) => {
+    // Each slot owns a disjoint hour range so there's no ambiguity between slots.
+    // Score = dayOffset * DAY_PENALTY + |hour - targetHour|
+    // DAY_PENALTY > max possible hourDiff within a range, so same-day entries
+    // always beat next-day entries when both are within the range.
+    const DAY_PENALTY = 8;
+    const slots = [
+      { key: "matin", targetHour: 9,  rangeMin: 5,  rangeMax: 12 },
+      { key: "midi",  targetHour: 14, rangeMin: 12, rangeMax: 17 },
+      { key: "soir",  targetHour: 20, rangeMin: 17, rangeMax: 24 },
+    ];
+
+    const available = forecastEvent.forecast.filter(
+      (e) => new Date(e.datetime) >= cutoff
+    );
+
+    const result = slots.map((slot) => {
       let best = null;
-      let bestDiff = Infinity;
-      for (const entry of forecastEvent.forecast) {
+      let bestScore = Infinity;
+      let bestDayOffset = 0;
+
+      for (const entry of available) {
         const ep = getLocalParts(new Date(entry.datetime));
+        if (ep.hour < slot.rangeMin || ep.hour >= slot.rangeMax) continue;
+
         const entryDayMs = Date.UTC(ep.year, ep.month - 1, ep.day);
-        const entryOffset = Math.round((entryDayMs - todayMs) / 86400000);
-        if (entryOffset === dayOffset) {
-          const diff = Math.abs(ep.hour - targetHour);
-          if (diff < bestDiff) {
-            bestDiff = diff;
-            best = entry;
-          }
+        const dayOffset = Math.round((entryDayMs - todayMs) / 86400000);
+        const score = dayOffset * DAY_PENALTY + Math.abs(ep.hour - slot.targetHour);
+
+        if (score < bestScore) {
+          bestScore = score;
+          best = entry;
+          bestDayOffset = dayOffset;
         }
       }
-      return best;
+
+      if (!best) return null;
+
+      const label = bestDayOffset > 0
+        ? `${t.slidingSlots.demain} ${t.slidingSlots[slot.key]}`
+        : t.slidingSlots[slot.key];
+
+      return { ...best, _slotLabel: label };
     }).filter(Boolean);
 
     if (!result.length) return null;
-    return { type: "hourly", forecast: result };
+    result.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+    return { type: "sliding", forecast: result };
   }
 
   connectedCallback() {
@@ -846,18 +873,20 @@ _unsubscribeDailyForecastEvents() {
     return html` <li>
       <ul class="flow-column day">
         <li>
-          ${isDaily
-            ? new Date(daily.datetime).toLocaleDateString(lang, {
-                weekday: "short",
-                day: "numeric",
-                timeZone: this.hass.config.time_zone,
-              })
-            : new Date(daily.datetime).toLocaleTimeString(lang, {
-                "hour": "2-digit",
-                "minute": "2-digit",
-                "timeZone": this.hass.config.time_zone,
-                ...this.getTimeFormatOptions(),
-              })}
+          ${daily._slotLabel !== undefined
+            ? daily._slotLabel
+            : isDaily
+              ? new Date(daily.datetime).toLocaleDateString(lang, {
+                  weekday: "short",
+                  day: "numeric",
+                  timeZone: this.hass.config.time_zone,
+                })
+              : new Date(daily.datetime).toLocaleTimeString(lang, {
+                  "hour": "2-digit",
+                  "minute": "2-digit",
+                  "timeZone": this.hass.config.time_zone,
+                  ...this.getTimeFormatOptions(),
+                })}
         </li>
         <li
           class="icon"
