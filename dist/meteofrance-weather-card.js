@@ -97,6 +97,7 @@ const translations = {
       "matin": "Matin",
       "midi": "Midi",
       "soir": "Soir",
+      "cesoir": "Ce soir",
       "demain": "Demain",
     },
   },
@@ -156,6 +157,7 @@ const translations = {
       "matin": "Morning",
       "midi": "Afternoon",
       "soir": "Evening",
+      "cesoir": "Tonight",
       "demain": "Tmw.",
     },
   },
@@ -464,7 +466,6 @@ _unsubscribeDailyForecastEvents() {
 
     const tz = this.hass.config.time_zone;
     const now = new Date();
-    // 30-minute grace: don't discard entries that just tipped into the past
     const cutoff = new Date(now.getTime() - 30 * 60 * 1000);
 
     const getLocalParts = (date) => {
@@ -484,22 +485,21 @@ _unsubscribeDailyForecastEvents() {
     const todayMs = Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day);
     const t = this.getTranslations();
 
-    // Each slot owns a disjoint hour range so there's no ambiguity between slots.
-    // Score = dayOffset * DAY_PENALTY + |hour - targetHour|
-    // DAY_PENALTY > max possible hourDiff within a range, so same-day entries
-    // always beat next-day entries when both are within the range.
+    // Each slot owns a disjoint hour range — no overlap, no ambiguity.
+    // Score = (dayOffset - minDayOffset) * DAY_PENALTY + |hour - targetHour|
+    // DAY_PENALTY > max hourDiff within a range so same-day always beats next-day.
     const DAY_PENALTY = 8;
-    const slots = [
+    const available = forecastEvent.forecast.filter(
+      (e) => new Date(e.datetime) >= cutoff
+    );
+
+    const slotDefs = [
       { key: "matin", targetHour: 9,  rangeMin: 5,  rangeMax: 12 },
       { key: "midi",  targetHour: 14, rangeMin: 12, rangeMax: 17 },
       { key: "soir",  targetHour: 20, rangeMin: 17, rangeMax: 24 },
     ];
 
-    const available = forecastEvent.forecast.filter(
-      (e) => new Date(e.datetime) >= cutoff
-    );
-
-    const result = slots.map((slot) => {
+    const findSlot = (slot, minDayOffset = 0) => {
       let best = null;
       let bestScore = Infinity;
       let bestDayOffset = 0;
@@ -507,11 +507,10 @@ _unsubscribeDailyForecastEvents() {
       for (const entry of available) {
         const ep = getLocalParts(new Date(entry.datetime));
         if (ep.hour < slot.rangeMin || ep.hour >= slot.rangeMax) continue;
-
         const entryDayMs = Date.UTC(ep.year, ep.month - 1, ep.day);
         const dayOffset = Math.round((entryDayMs - todayMs) / 86400000);
-        const score = dayOffset * DAY_PENALTY + Math.abs(ep.hour - slot.targetHour);
-
+        if (dayOffset < minDayOffset) continue;
+        const score = (dayOffset - minDayOffset) * DAY_PENALTY + Math.abs(ep.hour - slot.targetHour);
         if (score < bestScore) {
           bestScore = score;
           best = entry;
@@ -521,15 +520,24 @@ _unsubscribeDailyForecastEvents() {
 
       if (!best) return null;
 
-      const label = bestDayOffset > 0
-        ? `${t.slidingSlots.demain} ${t.slidingSlots[slot.key]}`
-        : t.slidingSlots[slot.key];
+      const label = slot.key === "soir"
+        ? (bestDayOffset === 0 ? t.slidingSlots.cesoir : `${t.slidingSlots.demain} ${t.slidingSlots.soir}`)
+        : (bestDayOffset > 0 ? `${t.slidingSlots.demain} ${t.slidingSlots[slot.key]}` : t.slidingSlots[slot.key]);
 
-      return { ...best, _slotLabel: label };
-    }).filter(Boolean);
+      return { ...best, _slotLabel: label, _slotKey: slot.key, _slotDayOffset: bestDayOffset };
+    };
+
+    const result = slotDefs.map((s) => findSlot(s)).filter(Boolean);
+    result.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+    // When leading slot is "Ce soir", add "Demain Soir" so the user can see
+    // the full next day: Ce soir / Demain Matin / Demain Midi / Demain Soir.
+    if (result.length > 0 && result[0]._slotKey === "soir" && result[0]._slotDayOffset === 0) {
+      const demainSoir = findSlot(slotDefs[2], 1);
+      if (demainSoir) result.push(demainSoir);
+    }
 
     if (!result.length) return null;
-    result.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
     return { type: "sliding", forecast: result };
   }
 
@@ -620,7 +628,7 @@ _unsubscribeDailyForecastEvents() {
           ? this.renderForecast(this._dailyForecastEvent, this._config.number_of_daily_forecasts)
           : ""}
         ${this._config.forecast_type === "sliding"
-          ? this.renderForecast(this._computeSlidingForecast(this._slidingForecastEvent), this._config.number_of_forecasts || 3)
+          ? this.renderForecast(this._computeSlidingForecast(this._slidingForecastEvent))
           : ""}
       </ha-card>
     `;
@@ -850,12 +858,7 @@ _unsubscribeDailyForecastEvents() {
       class="flow-row forecast ${this.numberElements > 1 ? " spacer" : ""}"
     >
       ${forecast.forecast
-        .slice(
-          0,
-          number_of_forecasts
-            ? number_of_forecasts
-            : 5
-        )
+        .slice(0, number_of_forecasts != null ? number_of_forecasts : forecast.forecast.length)
         .map((daily) => this.renderDailyForecast(daily, lang, isDaily))}
     </ul></div>`;
   }
@@ -874,7 +877,7 @@ _unsubscribeDailyForecastEvents() {
       <ul class="flow-column day">
         <li>
           ${daily._slotLabel !== undefined
-            ? daily._slotLabel
+            ? html`${daily._slotLabel}<span class="slotTime">${new Date(daily.datetime).toLocaleTimeString(lang, { "hour": "2-digit", "minute": "2-digit", "timeZone": this.hass.config.time_zone, ...this.getTimeFormatOptions() })}</span>`
             : isDaily
               ? new Date(daily.datetime).toLocaleDateString(lang, {
                   weekday: "short",
@@ -1442,6 +1445,13 @@ _unsubscribeDailyForecastEvents() {
 
       .forecast ul.day > *:first-child {
         text-transform: uppercase;
+      }
+
+      .slotTime {
+        display: block;
+        font-size: 0.75em;
+        color: var(--secondary-text-color);
+        text-transform: none;
       }
 
       .forecast ul.day .highTemp {
