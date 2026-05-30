@@ -897,7 +897,7 @@ _unsubscribeDailyForecastEvents() {
       <ul class="flow-column day">
         <li>
           ${daily._slotLabel !== undefined
-            ? html`${daily._slotPrefix ? html`${daily._slotPrefix}<br>` : ""}${daily._slotLabel}<span class="slotTime">${new Date(daily.datetime).toLocaleTimeString(lang, { "hour": "2-digit", "minute": "2-digit", "timeZone": this.hass.config.time_zone, ...this.getTimeFormatOptions() })}</span>`
+            ? html`${daily._slotPrefix ? html`${daily._slotPrefix}<br>` : ""}${daily._slotLabel}`
             : isDaily
               ? new Date(daily.datetime).toLocaleDateString(lang, {
                   weekday: "short",
@@ -1461,7 +1461,7 @@ _unsubscribeDailyForecastEvents() {
       .forecast ul.day {
         align-items: center;
         text-align: center;
-        font-size: 1.15em;
+        font-size: 1.25em;
         width: auto;
       }
 
@@ -1485,8 +1485,8 @@ _unsubscribeDailyForecastEvents() {
       }
 
       .forecast ul.day .icon {
-        width: 60px;
-        height: 60px;
+        width: 70px;
+        height: 70px;
       }
     `;
   }
