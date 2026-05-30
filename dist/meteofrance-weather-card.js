@@ -523,7 +523,15 @@ _unsubscribeDailyForecastEvents() {
       let slotPrefix = "";
       let slotName;
       if (slot.key === "soir" && bestDayOffset === 0) {
-        slotName = t.slidingSlots.cesoir;
+        // Split "Ce soir" → prefix "Ce" / name "Soir" for two-line display
+        const cesoirLabel = t.slidingSlots.cesoir;
+        const spaceIdx = cesoirLabel.indexOf(" ");
+        if (spaceIdx > 0) {
+          slotPrefix = cesoirLabel.slice(0, spaceIdx);
+          slotName = cesoirLabel.slice(spaceIdx + 1);
+        } else {
+          slotName = cesoirLabel;
+        }
       } else {
         slotPrefix = bestDayOffset > 0 ? t.slidingSlots.demain : "";
         slotName = t.slidingSlots[slot.key];
@@ -863,8 +871,9 @@ _unsubscribeDailyForecastEvents() {
     const isDaily = forecast.type === "daily";
 
     this.numberElements++;
+    const forecastSpacerClass = (forecast.type !== "sliding" && this.numberElements > 1) ? " spacer" : "";
     return html`  <div style="overflow-x:auto;"> <ul
-      class="flow-row forecast ${this.numberElements > 1 ? " spacer" : ""}"
+      class="flow-row forecast${forecastSpacerClass}"
     >
       ${forecast.forecast
         .slice(0, number_of_forecasts != null ? number_of_forecasts : forecast.forecast.length)
